@@ -1,9 +1,5 @@
-// Azura Bay missions — six story jobs with staged objectives and dialogue.
-// Free roam points at the next job's gold marker; E starts it. Stages advance
-// on objectives (reach / pickup / talk / lose / survive / deliver); the last
-// stage pays cash + REP and unlocks the next job. Progress resumes from
-// state.saveData.missionsDone. Targets are fixed road-grid points so every run
-// plays the same. Writes state.mission + state.dialogue every update.
+// Missions: six story jobs with staged objectives and dialogue. Writes
+// state.mission + state.dialogue every update.
 import * as THREE from 'three';
 import { MISSIONS } from './config.js';
 import { dist2 } from './utils.js';
@@ -124,6 +120,14 @@ export function createMissions(ctx) {
     ctx.emit('missionStart', { id });
     ctx.showToast(meta(id).name + ' — ' + meta(id).contact);
     beginStage();
+  }
+
+  // Opening hook: a fresh run starts the first job at once — banner, beacon
+  // and briefing live from second 0 instead of waiting for the walk to Rosa.
+  function startNext() {
+    if (activeId || doneList.length) return;
+    const id = nextId();
+    if (id) startMission(id);
   }
 
   function failMission(reason) {
@@ -259,5 +263,5 @@ export function createMissions(ctx) {
     }
   }
 
-  return { name: 'missions', update, init };
+  return { name: 'missions', update, init, startNext };
 }

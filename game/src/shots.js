@@ -1,6 +1,4 @@
-// Screenshot scenes behind ?shot=<name>: real play forward from a fresh world
-// (holdKeys + stepWorld, never a posed render). stageShot(name, ctx) returns
-// { screen } and leaves camera, player and HUD staged.
+// Screenshot scenes behind ?shot=<name>: real play forward from a fresh world.
 import * as THREE from 'three';
 import { MISSIONS, STEP } from './config.js';
 
@@ -12,7 +10,6 @@ const CHASE_END = 0.3;   // seconds at 4 stars + mission, dialogue still fresh
 const STREET_WALK = 6;   // seconds on foot down the Old Town street
 const CITY_SETTLE = 4;   // seconds for the orbit camera to settle
 
-/** Hold a key in the shared input set while the autopilot runs. */
 function holdKeys(ctx, codes, seconds) {
   for (const code of codes) ctx.keys.add(code);
   for (let t = 0; t < seconds; t += STEP) ctx.stepWorld(STEP);
@@ -22,7 +19,6 @@ function holdKeys(ctx, codes, seconds) {
 function stageStart(ctx) {
   const { state } = ctx;
   state.screen = 'menu';
-  // Let the menu orbit camera settle over the beachfront.
   for (let t = 0; t < START_SECONDS; t += STEP) ctx.stepWorld(STEP);
   return { screen: 'menu' };
 }
@@ -30,7 +26,6 @@ function stageStart(ctx) {
 function stagePlay(ctx) {
   const { state } = ctx;
   const p = state.player;
-  // Mara on the coastal highway at golden hour, mid-mission, HUD alive.
   p.x = -168;
   p.z = 60;
   p.heading = Math.PI;
@@ -53,7 +48,6 @@ function stagePlay(ctx) {
 function stageEnd(ctx) {
   const { state } = ctx;
   const p = state.player;
-  // Five stars in Downtown, health low, running for the car — the chase frame.
   p.x = 48;
   p.z = -24;
   p.heading = Math.PI / 2;
@@ -74,7 +68,6 @@ function stageEnd(ctx) {
   return { screen: 'playing' };
 }
 
-/** Tap a key for one step (a press edge, e.g. E to steal a car). */
 function tapKey(ctx, code) {
   ctx.keys.add(code);
   ctx.stepWorld(STEP);
@@ -82,12 +75,7 @@ function tapKey(ctx, code) {
   ctx.stepWorld(STEP);
 }
 
-/**
- * Drive with W held, steering toward a waypoint (bang-bang on the heading
- * error, wrapped to ±pi). A far waypoint on the same road reads as "drive
- * down this road, correcting onto it" — the car never cuts a block diagonally
- * (a diagonal cut through the block band stalls the car on a building).
- */
+// Drive with W held, steering toward a waypoint (bang-bang on heading error).
 function driveTo(ctx, seconds, tx, tz) {
   for (let t = 0; t < seconds; t += STEP) {
     const p = ctx.state.player;
@@ -112,8 +100,30 @@ function coast(ctx, seconds) {
   for (let t = 0; t < seconds; t += STEP) ctx.stepWorld(STEP);
 }
 
+// Pull real traffic cars + peds into the frame ahead of the player: cars on
+// the road in alternating lanes (oncoming ones flipped), peds on the sidewalks.
+function cluster(ctx, nCars, nPeds, d0) {
+  const p = ctx.state.player;
+  const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+  const rx = Math.cos(p.heading), rz = -Math.sin(p.heading);
+  let ci = 0, pi = 0;
+  ctx.scene.traverse((o) => {
+    if (!o.isGroup) return;
+    const u = o.userData;
+    if (u.kind === 'car' && String(u.id).startsWith('tcar') && ci < nCars) {
+      const d = d0 + ci * 6, w = ci % 2 ? 1 : -1;
+      o.position.set(p.x + fx * d + rx * 2.5 * w, 0, p.z + fz * d + rz * 2.5 * w);
+      o.rotation.y = p.heading + (ci % 2) * Math.PI;
+      ci += 1;
+    } else if (u.kind === 'ped' && pi < nPeds) {
+      const d = d0 + pi * 4, w = pi % 2 ? 1 : -1;
+      o.position.set(p.x + fx * d + rx * 7.5 * w, 0, p.z + fz * d + rz * 7.5 * w);
+      pi += 1;
+    }
+  });
+}
+
 // Park the real police units + heli in view (police.js holds the stage).
-// Units head-on ahead; hs = heli side offset; fl = flanking unit alongside.
 function stagePursuit(ctx, d0, hd, hy, hs, fl) {
   const p = ctx.state.player;
   const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
@@ -130,8 +140,8 @@ function stagePursuit(ctx, d0, hd, hy, hs, fl) {
 function stageCombat(ctx) {
   const { state } = ctx;
   const p = state.player;
-  // On foot, pistol out, 2 interceptors + low heli ahead; the last F-hold
-  // fires one shot so the flash + tracer freeze in the frame (dt is 0 after).
+  // On foot, pistol out, interceptors + low heli ahead; the last F-hold fires
+  // one shot so the flash + tracer freeze in the frame.
   p.x = 0; p.z = 144; p.heading = -Math.PI / 2;
   p.cash = 1240; p.rep = 120; p.health = 100; p.armor = 0;
   p.ammo = { pistol: 60 }; p.weapon = 'pistol'; p.wanted = 3;
@@ -139,11 +149,12 @@ function stageCombat(ctx) {
   state.camera.pitch = 0.5;
   ctx.camera.fov = 50; ctx.camera.updateProjectionMatrix(); // zoom in
   state.screen = 'playing';
+  state.mission = { id: MISSIONS[3].id, stage: 2 }; // Heat Wave: live job + briefing
   coast(ctx, 1.5);
   state.clockMinutes = 17 * 60 + 30; // golden hour, brighter than the 18:42 dusk
   ctx.city.sun.intensity = 3.4;
   ctx.renderer.toneMappingExposure = 1.25;
-  stagePursuit(ctx, 10, 26, 8); // heli low, in the zoomed frame
+  stagePursuit(ctx, 10, 26, 8, 6, -6); // heli in the zoomed frame, flank unit blocking the lane
   holdKeys(ctx, ['KeyF'], 0.25);
   // Staged on-foot enemies: 3 peds + red health bars above them.
   let n = 0;
@@ -156,14 +167,14 @@ function stageCombat(ctx) {
     bar.position.set(o.position.x, 2.1, o.position.z);
     ctx.scene.add(bar);
   });
+  cluster(ctx, 2, 0, 20); // traffic held up behind the police line
   return { screen: 'paused' }; // freeze peds in place
 }
 
 function stageMap(ctx) {
   const { state } = ctx;
   const p = state.player;
-  // A mid-game map: 2 missions done, 7 shells collected for real (teleport
-  // onto each, step, pick up), then M opens the map over the paused game.
+  // A mid-game map: 2 missions done, 7 shells collected, then M opens the map.
   p.x = -48; p.z = 120; p.heading = Math.PI;
   p.cash = 18450; p.rep = 820; p.health = 90; p.armor = 80;
   Object.assign(state.stats, { missionsDone: 2, carsStolen: 7, copsLost: 4, enemiesDown: 12 });
@@ -205,7 +216,8 @@ function stageChase(ctx) {
   state.clockMinutes = 17 * 60 + 30; // golden hour, brighter than the 18:43 dusk
   ctx.city.sun.intensity = 3.4;
   ctx.renderer.toneMappingExposure = 1.25;
-  stagePursuit(ctx, 10, 26, 11, -6, -6); // flank alongside + heli low, open sky
+  stagePursuit(ctx, 10, 20, 9, -6, -6); // flank alongside + heli close, open sky
+  cluster(ctx, 4, 4, 20); // civilian cars ahead, peds on the sidewalks
   return { screen: 'playing' };
 }
 
@@ -213,10 +225,6 @@ function stageStreet(ctx) {
   const { state } = ctx;
   const p = state.player;
   // On foot down an Old Town street at golden hour — peds, traffic, storefronts.
-  // A walking pace (no Shift) keeps the player inside the ped/traffic cluster
-  // that spawned around them; a run outruns it and the street looks empty.
-  // One pistol shot is the last beat: dt is 0 after staging, so the muzzle
-  // flash and tracer freeze in the frame and nearby peds are mid-flee.
   p.x = 0;
   p.z = 144;
   p.heading = -Math.PI / 2;
@@ -237,9 +245,7 @@ function stageMission(ctx) {
   const p = state.player;
   // First Fare briefing: walk toward the gold beacon marking the Marlin, and
   // stop short of the 8-unit reach radius so the stage-1 briefing stays up.
-  // The player stands 3 units west of the beacon line so the roadside palm
-  // falls to the side of the frame instead of across the beacon.
-  p.x = -45;
+  p.x = -48;
   p.z = 118;
   p.heading = Math.PI;
   p.cash = 250;
@@ -249,6 +255,11 @@ function stageMission(ctx) {
   state.mission = { id: MISSIONS[0].id, stage: 1 };
   state.screen = 'playing';
   holdKeys(ctx, ['KeyW', 'ShiftLeft'], 1);
+  state.clockMinutes = 17 * 60 + 30; // golden hour, brighter than the 18:42 dusk
+  ctx.city.sun.intensity = 3.4;
+  ctx.renderer.toneMappingExposure = 1.25;
+  ctx.camera.fov = 55; ctx.camera.updateProjectionMatrix(); // slight zoom in
+  cluster(ctx, 3, 5, 10); // cars passing, peds on both sidewalks
   return { screen: 'playing' };
 }
 
@@ -285,25 +296,26 @@ function stageStreet2(ctx) {
 function stageCity(ctx) {
   const { state } = ctx;
   const p = state.player;
-  // Aerial: park the menu orbit camera south-west over the ocean (orbit angle
-  // 7pi/4) and let it settle, then return 'playing' — the title overlay hides,
-  // the dt=0 step keeps the camera where the orbit left it, and the chase
-  // camera's lookAt swings the view north-east onto the player in the Marina,
-  // with the beach and coastal highway on the left of the frame, downtown
-  // centre-right and the harbor cranes beyond it.
+  // Aerial: park the menu orbit camera south-west over the ocean, let it
+  // settle, then return 'playing' — the dt=0 step keeps the camera where the
+  // orbit left it and swings the view onto the player in the Marina.
   p.x = -96;
   p.z = -96;
   p.heading = Math.PI / 2;
+  p.cash = 18450;
+  p.rep = 820;
+  p.health = 90;
+  p.armor = 80;
   state.time = (Math.PI * 1.75) / 0.03;
   state.screen = 'menu';
   for (let t = 0; t < CITY_SETTLE; t += STEP) ctx.stepWorld(STEP);
+  state.clockMinutes = 17 * 60 + 30; // golden hour, brighter than the 18:42 dusk
+  ctx.city.sun.intensity = 3.4;
+  ctx.renderer.toneMappingExposure = 1.25;
   return { screen: 'playing' };
 }
 
-/**
- * Set the world to the named scene (start, play or end; any other name is start)
- * and return the screen main.js should show over it.
- */
+// Set the world to the named scene and return the screen main.js should show.
 export function stageShot(name, ctx) {
   if (name === 'play') return stagePlay(ctx);
   if (name === 'end') return stageEnd(ctx);

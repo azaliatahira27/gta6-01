@@ -57,6 +57,7 @@ export const state = {
 
 /** Systems registered for the fixed-step update, in order. */
 const systems = [];
+let missionsSys = null;
 export function registerSystem(system) {
   systems.push(system);
 }
@@ -261,7 +262,7 @@ function stepCamera(dt) {
     // Slow establishing orbit over the city for the start screen.
     const t = state.time * 0.03;
     camTarget.set(0, 12, 0);
-    camPos.set(Math.sin(t) * 190 - 60, 85, Math.cos(t) * 190);
+    camPos.set(Math.sin(t) * 150 - 60, 62, Math.cos(t) * 150);
     camera.position.lerp(camPos, Math.min(1, dt * 1.5));
     camera.lookAt(camTarget);
     city.followSun(0, 0);
@@ -290,6 +291,7 @@ function startGame() {
   els.pauseMenu.classList.add('hidden');
   announce('Playing. ' + city.getDistrictAt(state.player.x, state.player.z) + '.');
   emit('gameStart', {});
+  if (missionsSys) missionsSys.startNext();
 }
 function togglePause() {
   if (state.screen === 'playing') {
@@ -333,15 +335,15 @@ document.addEventListener('visibilitychange', () => {
 
 // --- Systems boot ------------------------------------------------------------------------
 function bootSystems() {
-  // Order is the contract (INTERFACES.md): city ambient, then player, then the
-  // systems later builders register here in the same order.
+  // Order is the contract (INTERFACES.md).
   registerSystem({ name: 'city', update: (dt) => city.update(dt, state.time) });
   registerSystem({ name: 'player', update: (dt) => stepPlayer(dt) });
   registerSystem(createVehicles(ctx));
   registerSystem(createTraffic(ctx));
   registerSystem(createPolice(ctx));
   registerSystem(createCombat(ctx));
-  registerSystem(createMissions(ctx));
+  missionsSys = createMissions(ctx);
+  registerSystem(missionsSys);
   registerSystem(createMap(ctx));
   registerSystem(createCollectibles(ctx));
   registerSystem(createAudio(ctx));

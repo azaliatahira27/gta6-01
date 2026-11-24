@@ -90,7 +90,7 @@ export const POLICE = {
   fullName: 'Azura Bay Police Department',
   carName: 'ABPD Interceptor',
   heliName: 'ABPD Falcon',
-  carColor: 0x1a1a2e,
+  carColor: 0x2b4a72,
   lightA: 0xff2a2a,
   lightB: 0x2a6bff,
   maxStars: 5,

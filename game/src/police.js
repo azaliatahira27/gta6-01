@@ -1,6 +1,4 @@
-// ABPD wanted system: heat from crimes, pursuit units, helicopter, roadblocks.
-// Writes state.police { units: [{ name, state, dist, x, z }], heli } every step
-// (hud.js reads it). Reads state.events before main.js drains the queue.
+// ABPD wanted system: heat, pursuit units, heli, roadblocks. Writes state.police.
 import * as THREE from 'three';
 import { POLICE } from './config.js';
 import { clamp, dist2, lerpAngle, mulberry32, pick } from './utils.js';
@@ -12,6 +10,7 @@ const BUST_SECONDS = 3;
 
 function makeInterceptorMesh(name, id) {
   const g = new THREE.Group();
+  g.scale.setScalar(1.15); // read at frame scale: bigger silhouette than traffic
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.8, 4.4),
     new THREE.MeshStandardMaterial({ color: POLICE.carColor, roughness: 0.4, metalness: 0.5 }));
   body.position.y = 0.6;
@@ -26,11 +25,11 @@ function makeInterceptorMesh(name, id) {
     new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 }));
   bar.position.set(0, 1.62, -0.2);
   g.add(bar);
-  const lensA = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.24, 0.46),
-    new THREE.MeshStandardMaterial({ color: 0x330000, emissive: POLICE.lightA, emissiveIntensity: 6 }));
+  const lensA = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.34, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0x330000, emissive: POLICE.lightA, emissiveIntensity: 8 }));
   lensA.position.set(-0.4, 1.66, -0.2);
   g.add(lensA);
-  const lensB = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.24, 0.46),
+  const lensB = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.34, 0.5),
     new THREE.MeshStandardMaterial({ color: 0x000033, emissive: POLICE.lightB, emissiveIntensity: 0.4 }));
   lensB.position.set(0.4, 1.66, -0.2);
   g.add(lensB);
@@ -48,8 +47,10 @@ function makeInterceptorMesh(name, id) {
 
 function makeHeliMesh() {
   const g = new THREE.Group();
+  g.scale.setScalar(1.5); // read at frame scale: a helicopter, not a black box
   const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.4, 5.4),
-    new THREE.MeshStandardMaterial({ color: 0x3a5a7a, roughness: 0.5, metalness: 0.4 }));
+    new THREE.MeshStandardMaterial({ color: 0xd8dee6, roughness: 0.5, metalness: 0.4,
+      emissive: 0x8b9aa8, emissiveIntensity: 0.9 }));
   body.position.y = 0;
   g.add(body);
   // Rotor disc reads as a helicopter against the sky.
@@ -58,13 +59,14 @@ function makeHeliMesh() {
   rotor.position.y = 1.1;
   g.add(rotor);
   const tail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 3.4),
-    new THREE.MeshStandardMaterial({ color: 0x3a5a7a, roughness: 0.5 }));
+    new THREE.MeshStandardMaterial({ color: 0xd8dee6, roughness: 0.5,
+      emissive: 0x8b9aa8, emissiveIntensity: 0.9 }));
   tail.position.set(0, 0.2, -4.2);
   g.add(tail);
   // Spotlight cone, apex at the heli, opening toward the player below.
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(7, 40, 20, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
-  cone.position.y = -20; // apex at the heli, wide end on the ground below
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(7, 28, 20, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.26, side: THREE.DoubleSide, depthWrite: false }));
+  cone.position.y = -14; // apex at the heli, wide end on the ground below
   g.add(cone);
   g.userData = { kind: 'cop', id: 'heli', hp: 9999, rotor, cone };
   return g;
@@ -187,9 +189,9 @@ export function createPolice(ctx) {
     }
     if (!heli) return;
     heliAngle += dt * 0.5;
-    const hx = p.x + Math.cos(heliAngle) * 18;
-    const hz = p.z + Math.sin(heliAngle) * 18;
-    heli.position.set(hx, 40, hz);
+    const hx = p.x + Math.cos(heliAngle) * 15;
+    const hz = p.z + Math.sin(heliAngle) * 15;
+    heli.position.set(hx, 28, hz);
     heli.rotation.y = Math.atan2(p.x - hx, p.z - hz);
     heli.userData.rotor.rotation.y += dt * 22;
   }
@@ -210,7 +212,7 @@ export function createPolice(ctx) {
       heli.position.set(st.heli.x, st.heli.y, st.heli.z);
       heli.rotation.y = Math.atan2(p.x - st.heli.x, p.z - st.heli.z);
       const cn = heli.userData.cone;
-      if (cn) { cn.scale.y = st.heli.y / 40; cn.position.y = -st.heli.y / 2; }
+      if (cn) { cn.scale.y = st.heli.y / 28; cn.position.y = -st.heli.y / 2; }
     }
   }
 
@@ -323,8 +325,7 @@ export function createPolice(ctx) {
     }
   }
 
-  // Kill heat: combat.js `hit` events carry only a kind string, no kill flag,
-  // so scan the scene twice a second for newly dead peds/cops instead.
+  // Kill heat: scan the scene twice a second for newly dead peds/cops.
   function scanDeaths(dt, c) {
     scanT += dt;
     if (scanT < 0.5) return;
@@ -410,8 +411,8 @@ export function createPolice(ctx) {
       flashT = 0;
       flashOn = !flashOn;
       for (const u of units) {
-        u.mesh.userData.lensA.material.emissiveIntensity = flashOn ? 6 : 0.4;
-        u.mesh.userData.lensB.material.emissiveIntensity = flashOn ? 0.4 : 6;
+        u.mesh.userData.lensA.material.emissiveIntensity = flashOn ? 8 : 0.4;
+        u.mesh.userData.lensB.material.emissiveIntensity = flashOn ? 0.4 : 8;
       }
     }
     // Publish the contract state every step.

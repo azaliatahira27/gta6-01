@@ -1,14 +1,11 @@
-// Traffic cars + pedestrians for Azura Bay. Cars drive the road graph from
-// city.getRoadNetwork(); peds walk the sidewalks beside it. Both stay on
-// roads/sidewalks by construction, so no building collision is needed.
-// Damageable meshes carry userData { kind, id, hp } for combat.js raycasts.
+// Traffic cars + peds on the road graph; meshes carry userData { kind, id, hp }.
 import * as THREE from 'three';
 import { CITY } from './config.js';
 import { clamp, dist2, lerpAngle, mulberry32, pick, randRange } from './utils.js';
 
-const CAR_COUNT = 12;
-const PED_COUNT = 15;
-const CAR_COLORS = [0x8a8f98, 0x5d6a7a, 0xa89a86, 0x6b7a5d, 0x7a5d6b, 0xb0b0a8, 0x4a5a6a, 0x9a7a5a];
+const CAR_COUNT = 16;
+const PED_COUNT = 20;
+const CAR_COLORS = [0xc8ccd4, 0x7fa8c8, 0xd8c8a8, 0x8ab87a, 0xc08aa8, 0xe0e0d8, 0x6a9ab8, 0xd8a878];
 const SHIRTS = [0xd94f6a, 0x4f8fd9, 0x2fbfa0, 0xd9a441, 0xf2f2f2, 0x7a4fd9, 0xff8a5c, 0x5a7a4f];
 
 function makeCarMesh(color, id) {
@@ -63,6 +60,7 @@ export function createTraffic(ctx) {
   let peds = [];
   let ready = false;
   let densityT = 0;
+  let prevScreen = 'menu';
   let carSeq = 0;
   let pedSeq = 0;
 
@@ -80,7 +78,7 @@ export function createTraffic(ctx) {
 
   function spawnCar(nearPlayer) {
     const p = ctx.state.player;
-    const node = nearPlayer ? randomNodeNear(p.x, p.z, 20, 140) : pick(rng, net.nodes);
+    const node = nearPlayer ? randomNodeNear(p.x, p.z, 25, 80) : pick(rng, net.nodes);
     const mesh = makeCarMesh(pick(rng, CAR_COLORS), 'tcar' + (carSeq += 1));
     mesh.position.set(node.x, 0, node.z);
     ctx.scene.add(mesh);
@@ -95,7 +93,7 @@ export function createTraffic(ctx) {
 
   function spawnPed(nearPlayer) {
     const p = ctx.state.player;
-    const node = nearPlayer ? randomNodeNear(p.x, p.z, 10, 130) : pick(rng, net.nodes);
+    const node = nearPlayer ? randomNodeNear(p.x, p.z, 12, 70) : pick(rng, net.nodes);
     const off = CITY.roadWidth / 2 + CITY.sidewalk / 2;
     const side = rng() < 0.5 ? -1 : 1;
     const along = rng() < 0.5;
@@ -133,6 +131,22 @@ export function createTraffic(ctx) {
     }
     for (let i = 0; i < CAR_COUNT; i += 1) spawnCar(true);
     for (let i = 0; i < PED_COUNT; i += 1) spawnPed(true);
+  }
+
+  // Opening density: the moment play starts, drop every far actor and respawn
+  // the full count near the player, so the first frame is already busy.
+  function clusterNearPlayer() {
+    const p = ctx.state.player;
+    for (const [list, far] of [[cars, 80], [peds, 70]]) {
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        if (dist2(list[i].x, list[i].z, p.x, p.z) > far) {
+          ctx.scene.remove(list[i].mesh);
+          list.splice(i, 1);
+        }
+      }
+    }
+    while (cars.length < CAR_COUNT) spawnCar(true);
+    while (peds.length < PED_COUNT) spawnPed(true);
   }
 
   function carAhead(car) {
@@ -178,10 +192,13 @@ export function createTraffic(ctx) {
       car.speed += clamp(goal - car.speed, -20 * dt, 8 * dt);
       car.x += Math.sin(car.heading) * car.speed * dt;
       car.z += Math.cos(car.heading) * car.speed * dt;
-      car.mesh.position.set(car.x, 0, car.z);
-      car.mesh.rotation.y = car.heading;
+      // A zero step syncs nothing: shots.js may have posed the mesh by hand.
+      if (dt > 0) {
+        car.mesh.position.set(car.x, 0, car.z);
+        car.mesh.rotation.y = car.heading;
+      }
     }
-    // Density: keep the count near the player; recycle wrecks and far cars.
+    // Recycle wrecks and far cars, then top the count back up near the player.
     densityT += dt;
     if (densityT < 1) return;
     densityT = 0;
@@ -241,15 +258,18 @@ export function createTraffic(ctx) {
           ped.mesh.position.y = Math.abs(Math.sin(ctx.state.time * 8 + pedSeq)) * 0.04;
         }
       }
-      ped.mesh.position.set(ped.x, ped.mesh.position.y, ped.z);
-      ped.mesh.rotation.y = ped.heading;
+      if (dt > 0) {
+        ped.mesh.position.set(ped.x, ped.mesh.position.y, ped.z);
+        ped.mesh.rotation.y = ped.heading;
+      }
     }
     while (peds.length < PED_COUNT) spawnPed(true);
   }
 
   function update(dt, c) {
-    // main.js never calls init(); spawn lazily on the first step.
     if (!ready) init();
+    if (prevScreen === 'menu' && c.state.screen === 'playing') clusterNearPlayer();
+    prevScreen = c.state.screen;
     if (c.state.screen !== 'playing' && c.state.screen !== 'menu') return;
     updateCars(dt);
     updatePeds(dt);
