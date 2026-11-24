@@ -1,8 +1,8 @@
 # Azura Bay — Open-World Crime Game
 
 [![Make GTA 6 bounty](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?ref=7zhtwvs3)
-[![Rank](https://make.fun/badge/gta6-01/melianalanifa-afk/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01?ref=7zhtwvs3)
-[![Reward](https://make.fun/badge/gta6-01/melianalanifa-afk/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?ref=7zhtwvs3)
+[![Rank](https://make.fun/badge/gta6-01/azaliatahira27/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01?ref=7zhtwvs3)
+[![Reward](https://make.fun/badge/gta6-01/azaliatahira27/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?ref=7zhtwvs3
 
 **Azura Bay** is a 3D open-world crime game set in a sun-soaked coastal city at
 golden hour. You are **Mara Solis**, a driver for hire pulled into a heist crew.
