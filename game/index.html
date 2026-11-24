@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azura Bay — Open-World Crime Game</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a0f1e;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+  #scene { position: fixed; inset: 0; }
+  #scene canvas { display: block; width: 100%; height: 100%; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10;
+    text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  /* Every HUD child is positioned against #hud (right/top/bottom only work with this). */
+  #hud > div { position: absolute; }
+  .panel { position: absolute; background: rgba(10,8,18,.55); border: 1px solid rgba(255,255,255,.14);
+    border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(2px); }
+  /* Round minimap, bottom left. */
+  #minimap { left: 18px; bottom: 18px; width: 186px; height: 186px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.75); overflow: hidden; padding: 0;
+    box-shadow: 0 0 0 4px rgba(0,0,0,.35), 0 4px 18px rgba(0,0,0,.5); }
+  #minimap-canvas { width: 100%; height: 100%; display: block; }
+  #district-label { position: absolute; left: 18px; bottom: 212px; font-size: 13px; letter-spacing: .12em;
+    text-transform: uppercase; color: #ffd9a0; font-weight: 700; }
+  /* Mission objective, top left. */
+  #mission-panel { left: 18px; top: 18px; max-width: 340px; font-size: 14px; line-height: 1.45; }
+  #mission-panel .mission-title { font-weight: 800; letter-spacing: .06em; color: #ffd166; font-size: 13px;
+    text-transform: uppercase; }
+  /* Police / wanted readout, under the mission panel. */
+  #police-panel { left: 18px; top: 96px; font-size: 13px; display: none; }
+  #police-panel.hot { display: block; border-color: rgba(255,80,80,.6); }
+  /* Cash, stars and clock, top right. */
+  #cash { right: 18px; top: 18px; font-size: 22px; font-weight: 800; color: #7dff9a; text-align: right; }
+  #stars { right: 18px; top: 52px; font-size: 22px; letter-spacing: 2px; color: #ffd166; text-align: right; }
+  #clock { right: 18px; top: 86px; font-size: 14px; color: #ffd9a0; text-align: right; }
+  #rep { right: 18px; top: 108px; font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: #9ad1ff; text-align: right; }
+  /* Health / armour / speed / weapons, bottom right. */
+  #healthbar { right: 18px; bottom: 96px; width: 220px; }
+  #healthbar .bar { height: 10px; border-radius: 5px; background: rgba(255,255,255,.18); overflow: hidden; margin: 3px 0 6px; }
+  #healthbar .fill { height: 100%; border-radius: 5px; }
+  #health-fill { background: linear-gradient(90deg, #ff5a5a, #ff8a5a); width: 100%; }
+  #armor-fill { background: linear-gradient(90deg, #4fc3f7, #9ad1ff); width: 0%; }
+  #healthbar .bar-label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #e8e8e8; }
+  #weapon-slots { right: 18px; bottom: 176px; font-size: 13px; text-align: right; line-height: 1.6; }
+  #weapon-slots .active { color: #ffd166; font-weight: 800; }
+  #speedo { right: 18px; bottom: 18px; font-size: 30px; font-weight: 800; text-align: right; }
+  #speedo small { font-size: 12px; font-weight: 600; color: #ffd9a0; letter-spacing: .1em; }
+  #car-condition { right: 18px; bottom: 62px; font-size: 12px; text-align: right; color: #e8e8e8; }
+  /* Radio, bottom centre. */
+  #radio { left: 50%; bottom: 18px; transform: translateX(-50%); font-size: 13px; letter-spacing: .08em;
+    color: #ffd9a0; text-align: center; }
+  /* Dialogue, centre bottom above the radio. */
+  #dialogue-box { left: 50%; bottom: 64px; transform: translateX(-50%); max-width: 560px; width: calc(100% - 480px);
+    min-width: 300px; font-size: 15px; line-height: 1.5; display: none; }
+  #dialogue-box.show { display: block; }
+  #dialogue-box .speaker { font-weight: 800; color: #ffd166; letter-spacing: .05em; }
+  #dialogue-box .hint { font-size: 12px; color: #bdbdbd; margin-top: 6px; }
+  #toast { left: 50%; top: 18px; transform: translateX(-50%); font-size: 14px; font-weight: 700;
+    color: #fff; display: none; }
+  #toast.show { display: block; }
+  /* Full-screen overlays. */
+  .overlay { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: linear-gradient(180deg, rgba(26,10,30,.82), rgba(60,16,40,.78)); }
+  .overlay.hidden { display: none; }
+  .overlay h1 { margin: 0; font-size: 64px; letter-spacing: .1em; font-weight: 900;
+    background: linear-gradient(180deg, #ffe29a, #ff7e5f 55%, #c94b7c); -webkit-background-clip: text;
+    background-clip: text; color: transparent; text-shadow: none; }
+  .overlay h2 { margin: 6px 0 0; font-size: 17px; letter-spacing: .42em; font-weight: 600; color: #ffd9a0; }
+  .overlay p { max-width: 560px; color: #e8d8e8; line-height: 1.6; font-size: 15px; }
+  .overlay .controls { font-size: 13px; color: #c9b8cc; line-height: 1.9; margin-top: 8px; }
+  .overlay button { pointer-events: auto; cursor: pointer; margin-top: 18px; padding: 13px 34px;
+    font-size: 16px; font-weight: 800; letter-spacing: .12em; color: #2a0a1e; border: none; border-radius: 999px;
+    background: linear-gradient(90deg, #ffd166, #ff7e5f); box-shadow: 0 6px 24px rgba(255,126,95,.45); }
+  .overlay button:hover { filter: brightness(1.08); }
+  #start-screen .tagline { font-style: italic; color: #ffd9a0; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<div id="scene"></div>
+<div id="hud">
+  <div id="district-label">Coral Strip</div>
+  <div id="minimap" class="panel"><canvas id="minimap-canvas" width="186" height="186"></canvas></div>
+  <div id="mission-panel" class="panel"><div class="mission-title">Free Roam</div><div id="mission-text">Explore Azura Bay. Steal a car, meet the crew, make a name.</div></div>
+  <div id="police-panel" class="panel"><span id="police-text"></span></div>
+  <div id="cash">$0</div>
+  <div id="stars"></div>
+  <div id="clock">18:42</div>
+  <div id="rep">NOBODY</div>
+  <div id="weapon-slots"></div>
+  <div id="healthbar">
+    <div class="bar-label">Health</div><div class="bar"><div id="health-fill" class="fill"></div></div>
+    <div class="bar-label">Armour</div><div class="bar"><div id="armor-fill" class="fill"></div></div>
+  </div>
+  <div id="car-condition"></div>
+  <div id="speedo">0<small> MPH</small></div>
+  <div id="radio">SOL FM 98.7</div>
+  <div id="dialogue-box" class="panel"><div class="speaker"></div><div class="line"></div><div class="hint">Press E to continue</div></div>
+  <div id="toast" class="panel"></div>
+</div>
+<div id="start-screen" class="overlay">
+  <h1>AZURA BAY</h1>
+  <h2>SUNSET CITY &middot; OPEN WORLD</h2>
+  <p class="tagline">Mara Solis came to Azura Bay to drive. The city had other plans.</p>
+  <p>An open-world crime game in a sun-soaked coastal city. Steal cars, outrun the ABPD,
+  run jobs for the crew and climb from NOBODY to LEGEND.</p>
+  <button id="start-button" type="button">START ENGINE</button>
+  <div class="controls">WASD / Arrows — move &amp; drive &nbsp;&middot;&nbsp; F — enter / exit car &nbsp;&middot;&nbsp;
+  Mouse — look &nbsp;&middot;&nbsp; Left click — attack / shoot &nbsp;&middot;&nbsp; R — reload &nbsp;&middot;&nbsp;
+  1–4 — weapons &nbsp;&middot;&nbsp; Q — radio &nbsp;&middot;&nbsp; Esc — pause &nbsp;&middot;&nbsp; M — mute</div>
+</div>
+<div id="pause-menu" class="overlay hidden">
+  <h1>PAUSED</h1>
+  <h2>AZURA BAY</h2>
+  <p>Your progress saves automatically. Take a breath — the city will wait.</p>
+  <button id="resume-button" type="button">RESUME</button>
+  <button id="restart-button" type="button">RESTART RUN</button>
+</div>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
+<script type="module" src="./src/collectibles.js"></script>
+<script type="module" src="./src/map.js"></script>
+</body>
+</html>
