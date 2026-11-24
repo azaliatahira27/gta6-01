@@ -1,18 +1,15 @@
 // Azura Bay cars — parked spawns, stealing, arcade driving and damage.
-//
-// One mesh builder (three.js primitives) serves every car; per-car tuning comes
-// from CARS in config.js. While driving, state.player mirrors the car, so the
-// camera, minimap and police all read the player fields. No imports from other
-// builder modules: state fields + events only.
+// While driving, state.player mirrors the car, so the camera, minimap and
+// police all read the player fields. No imports from other builder modules.
 import * as THREE from 'three';
 import { CARS } from './config.js';
 import { clamp, dist2, resolveCircleBox } from './utils.js';
 import { clampToMap as clampMap } from './city.js';
 
-const CAR_R = 1.6; // collision circle radius
-const MPH_TO_UNITS = 0.32; // top mph -> units/s
+const CAR_R = 1.6;
+const MPH_TO_UNITS = 0.32;
 const STEAL_DIST = 3.2;
-const CRASH_DELTA = 12; // speed change (u/s) that counts as a hard impact
+const CRASH_DELTA = 12;
 
 const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.3, 12);
 const wheelMat = new THREE.MeshStandardMaterial({ color: 0x14141c, roughness: 0.9 });
@@ -21,7 +18,6 @@ const lightMat = new THREE.MeshStandardMaterial({ color: 0xfff6c9, emissive: 0xf
 const smokeMat = new THREE.MeshBasicMaterial({ color: 0x555560, transparent: true, opacity: 0.55, side: THREE.DoubleSide });
 const smokeGeo = new THREE.PlaneGeometry(1.1, 1.1);
 
-/** Build a low-poly car from primitives. Local +z is forward. */
 function buildCarMesh(def) {
   const g = new THREE.Group();
   const paint = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.35, metalness: 0.5 });
@@ -44,7 +40,6 @@ function buildCarMesh(def) {
     wheel.castShadow = true;
     g.add(wheel);
   }
-  // Headlights: emissive boxes + translucent cones (no SpotLights — too costly).
   const coneMat = new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false });
   for (const sx of [-0.6, 0.6]) {
     const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.14, 0.1), lightMat);
@@ -55,14 +50,12 @@ function buildCarMesh(def) {
     cone.position.set(sx, 0.55, 5.1);
     g.add(cone);
   }
-  // Taillights: red emissive boxes at the rear.
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x330000, emissive: 0xff2222, emissiveIntensity: 1.6 });
   for (const sx of [-0.6, 0.6]) {
     const tail = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.14, 0.1), tailMat);
     tail.position.set(sx, 0.62, -2.12);
     g.add(tail);
   }
-  // Cielo GT spoiler: wing on two struts.
   if (def.id === 'cielo') {
     const wing = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 0.5), paint);
     wing.position.set(0, 1.18, -1.95);
@@ -78,7 +71,6 @@ function buildCarMesh(def) {
   return g;
 }
 
-/** Grey smoke puffs for a wrecked car: a few planes that rise and fade. */
 function makeSmoke() {
   const group = new THREE.Group();
   const puffs = [];
@@ -120,7 +112,17 @@ export function createVehicles(ctx) {
   function damage(car, amount, at) {
     car.condition = Math.max(0, car.condition - amount);
     car.model.userData.hp = car.condition;
-    if (amount > 0) emit('hit', { target: car.name, damage: Math.round(amount), at });
+    // Visual damage: the paint darkens toward scorched as condition drops.
+    const paint = car.model.children[0].material;
+    if (paint && paint.color) {
+      const f = car.condition / 100;
+      const c = car.def.color;
+      const r = Math.round((((c >> 16) & 255) * f + 20 * (1 - f)));
+      const g = Math.round((((c >> 8) & 255) * f + 20 * (1 - f)));
+      const b = Math.round(((c & 255) * f + 20 * (1 - f)));
+      paint.color.setHex((r << 16) | (g << 8) | b);
+    }
+    if (amount > 0) emit('hit', { target: 'car', damage: Math.round(amount), at });
     if (car.condition <= 0 && !car.wrecked) {
       car.wrecked = true;
       car.speed = 0;
@@ -157,7 +159,6 @@ export function createVehicles(ctx) {
     const p = state.player;
     const car = p.inCar;
     if (!car) return;
-    // Step out on the driver's side, clear of the body.
     const side = car.heading + Math.PI / 2;
     const pos = clampMap(car.x + Math.sin(side) * 2.4, car.z + Math.cos(side) * 2.4);
     p.x = pos.x;
@@ -173,7 +174,7 @@ export function createVehicles(ctx) {
     const def = car.def;
     const maxSpeed = def.top * MPH_TO_UNITS;
     const onRoad = city.isOnRoad(car.x, car.z);
-    const surface = onRoad ? 1 : 0.6; // off-road cuts grip/accel ~40%
+    const surface = onRoad ? 1 : 0.6;
     const fwd = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0)
       - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
     const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
@@ -181,12 +182,11 @@ export function createVehicles(ctx) {
     if (!car.wrecked) {
       if (fwd > 0) car.speed += def.accel * 16 * surface * dt;
       else if (fwd < 0) car.speed -= (car.speed > 0.5 ? 26 : 9) * surface * dt;
-      else car.speed -= car.speed * Math.min(1, 0.6 * dt); // rolling drag
+      else car.speed -= car.speed * Math.min(1, 0.6 * dt);
     } else {
       car.speed -= car.speed * Math.min(1, 3 * dt);
     }
     car.speed = clamp(car.speed, -12, maxSpeed);
-    // Steering fades with speed so fast cars stay controllable.
     const steerScale = (1 - Math.min(1, Math.abs(car.speed) / maxSpeed) * 0.6) * def.grip * surface;
     car.heading += steer * 1.9 * steerScale * dt * Math.sign(car.speed || 1);
     const before = car.speed;
@@ -195,7 +195,6 @@ export function createVehicles(ctx) {
     const pos = clampMap(nx, nz);
     nx = pos.x;
     nz = pos.z;
-    // Buildings: hard impacts hurt the car.
     let hitBuilding = false;
     for (const box of ctx.colliders) {
       if (resolveCircleBox(pos, CAR_R, box)) hitBuilding = true;
@@ -203,7 +202,11 @@ export function createVehicles(ctx) {
     if (hitBuilding) {
       const impact = Math.abs(before);
       car.speed *= -0.22;
-      if (impact > CRASH_DELTA) damage(car, (impact - CRASH_DELTA) * 1.6, state.time);
+      if (impact > CRASH_DELTA) {
+        damage(car, (impact - CRASH_DELTA) * 1.6, state.time);
+        state.shake = Math.min(0.9, impact * 0.03);
+        state.hitStop = 0.05;
+      }
     }
     car.x = pos.x;
     car.z = pos.z;
@@ -225,13 +228,14 @@ export function createVehicles(ctx) {
           damage(car, (rel - CRASH_DELTA) * 0.8, state.time);
           damage(other, (rel - CRASH_DELTA) * 0.8, state.time);
           car.speed *= 0.5;
+          state.shake = Math.min(0.9, rel * 0.03);
+          state.hitStop = 0.05;
         }
         other.model.position.set(other.x, 0, other.z);
       }
     }
     car.model.position.set(car.x, 0, car.z);
     car.model.rotation.y = car.heading;
-    // Mirror the player fields: camera, minimap and police read them.
     p.x = car.x;
     p.z = car.z;
     p.heading = car.heading;
@@ -255,7 +259,6 @@ export function createVehicles(ctx) {
   }
 
   function update(dt) {
-    // Combat may zero a car's hp directly; honour it here.
     for (const car of cars) {
       if (!car.wrecked && car.model.userData.hp <= 0) damage(car, car.condition, state.time);
       updateSmoke(car, dt);
@@ -273,7 +276,6 @@ export function createVehicles(ctx) {
     }
     prevE = eDown;
     if (!p.onFoot && p.inCar) drive(p.inCar, dt);
-    // Parked cars stay put but keep their meshes in sync (shunts move them).
     for (const car of cars) {
       if (car !== p.inCar) {
         car.model.position.set(car.x, 0, car.z);
@@ -282,7 +284,6 @@ export function createVehicles(ctx) {
     }
   }
 
-  // main.js never calls init(); run it here like the other systems do.
   init();
   return { name: 'vehicles', init, update };
 }

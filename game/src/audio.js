@@ -1,27 +1,24 @@
 // Azura Bay audio — procedural radio + SFX, WebAudio only, no audio files.
-// Everything guards a missing AudioContext (headless): all calls no-op, never throw.
-// Radio follows state.radio (main.js owns the Q/M keys); SFX read state.events
-// in update, before main.js drains the queue.
+// Everything guards a missing AudioContext (headless): all calls no-op.
 import { RADIO } from './config.js';
 
-// Minor-progression roots, semitones above the station root (i–VI–III–VII).
 const PROG = [0, 8, 3, 10];
-const CHORD = [0, 3, 7, 12]; // minor triad + octave, for pads and arps
+const CHORD = [0, 3, 7, 12];
 
 export function createAudio(ctx) {
-  let ac = null;          // AudioContext, created lazily on first gesture
-  let master = null;      // master gain (0 when muted, else 0.8)
-  let musicBus = null;    // music gain (0.15)
-  let sfxBus = null;      // sfx gain (0.3)
+  let ac = null;
+  let master = null;
+  let musicBus = null;
+  let sfxBus = null;
   let noiseBuf = null;
-  let schedTimer = 0;     // radio lookahead timer
-  let nextStep = 0;       // time of the next scheduled eighth note
-  let step = 0;           // eighth-note counter within the loop
-  let curStation = -1;    // station index the scheduler is playing
+  let schedTimer = 0;
+  let nextStep = 0;
+  let step = 0;
+  let curStation = -1;
   let lastWanted = 0;
-  let engine = null;      // { osc, gain } while driving
-  let siren = null;       // { osc, gain } while police are near
-  let sirenFlip = 0;      // next siren tone swap time
+  let engine = null;
+  let siren = null;
+  let sirenFlip = 0;
   let sirenHi = false;
   let booted = false;
 
@@ -57,7 +54,6 @@ export function createAudio(ctx) {
     if (!schedTimer) schedTimer = window.setInterval(schedule, 100);
   }
 
-  // One short tone. `slide` glides the frequency; `at` offsets the start.
   function tone(freq, type, dur, vol, dest, slide, at) {
     if (!live()) return;
     try {
@@ -76,7 +72,6 @@ export function createAudio(ctx) {
     } catch { /* keep the game running if a node fails */ }
   }
 
-  // Filtered noise burst, e.g. gunshots and thuds.
   function noise(dur, vol, freq, q, type) {
     if (!live()) return;
     try {
@@ -100,8 +95,6 @@ export function createAudio(ctx) {
 
   const semis = (root, n) => root * Math.pow(2, n / 12);
 
-  // Schedule eighth notes up to 200 ms ahead. Bar = 8 eighths: bass every
-  // eighth, pad on bar start, sparse arp on steps 0/3/6.
   function schedule() {
     if (!live()) return;
     const s = st();
@@ -138,8 +131,8 @@ export function createAudio(ctx) {
       if (d.target === 'car') noise(0.25, 0.8, 120, 1, 'lowpass');
       else tone(1400, 'square', 0.05, 0.25);
     } else if (ev.type === 'carStolen') {
-      tone(90, 'sawtooth', 0.35, 0.4, sfxBus, 55); // ignition crank
-      tone(70, 'sawtooth', 0.9, 0.5, sfxBus, 160, 0.35); // engine catches
+      tone(90, 'sawtooth', 0.35, 0.4, sfxBus, 55);
+      tone(70, 'sawtooth', 0.9, 0.5, sfxBus, 160, 0.35);
     } else if (ev.type === 'missionDone') {
       [523, 659, 784, 1047].forEach((f, i) => tone(f, 'sine', 0.22, 0.5, sfxBus, 0, i * 0.12));
     } else if (ev.type === 'missionFail') {
@@ -152,7 +145,6 @@ export function createAudio(ctx) {
     if (ev.type === 'wanted' && typeof d.level === 'number') lastWanted = d.level;
   }
 
-  // Continuous engine hum: sawtooth through a lowpass, pitch tracks speed.
   function engineHum() {
     const p = st().player;
     const driving = !p.onFoot && p.inCar;
@@ -179,7 +171,6 @@ export function createAudio(ctx) {
     engine.osc.frequency.value = 55 + Math.abs(p.speed) * 3.2;
   }
 
-  // Police siren: two-tone 700/950 Hz alternation, quiet, panned slightly left.
   function policeSiren() {
     const units = st().police?.units ?? [];
     if (!live() || units.length === 0) {
@@ -210,12 +201,15 @@ export function createAudio(ctx) {
       siren.osc.frequency.value = sirenHi ? 950 : 700;
       sirenFlip = ac.currentTime + 0.45;
     }
+    // Spatial siren: louder as the nearest unit closes in, faint at range.
+    let near = Infinity;
+    for (const u of units) near = Math.min(near, u.dist ?? Infinity);
+    siren.gain.gain.value = near === Infinity ? 0.05 : Math.max(0.015, 0.14 - near * 0.0012);
   }
 
   function init() {
     if (booted) return;
     booted = true;
-    // Resume on the first gesture: gameStart, or any key/click we observe.
     const once = () => resume();
     window.addEventListener('keydown', once, { once: true });
     window.addEventListener('pointerdown', once, { once: true });

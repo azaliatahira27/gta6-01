@@ -1,9 +1,5 @@
 // Azura Bay HUD + minimap — renders every HUD panel from state each step.
-//
-// Owns all HUD DOM (main.js stubs are deleted once this system registers). Values
-// are cached: the DOM is touched only when a value actually changes. Reads the
-// coordinator state extensions defensively (police/dialogue/mission fields land
-// with builders C and D). Toasts stay with main.js.
+// Values are cached: the DOM is touched only when a value actually changes.
 import { RADIO, REP_RANKS, WEAPONS } from './config.js';
 import { formatCash, formatClock, repRankFor, wantedStars } from './utils.js';
 import { worldToMap } from './city.js';
@@ -21,7 +17,7 @@ export function createHud(ctx) {
     cash: $('cash'), stars: $('stars'), clock: $('clock'), rep: $('rep'),
     healthFill: $('health-fill'), armorFill: $('armor-fill'),
     weaponSlots: $('weapon-slots'), speedo: $('speedo'), carCondition: $('car-condition'),
-    radio: $('radio'), dialogue: $('dialogue-box'),
+    radio: $('radio'), dialogue: $('dialogue-box'), banner: $('banner'),
   };
   const mctx = els.minimap.getContext('2d');
   const cache = {};
@@ -65,7 +61,6 @@ export function createHud(ctx) {
   }
 
   function weaponHtml(p) {
-    // Owned = fists + anything with rounds left; current weapon highlighted.
     return WEAPONS.filter((w) => w.id === 'fists' || (p.ammo[w.id] ?? 0) > 0)
       .map((w) => {
         const ammo = w.ammo === Infinity ? '∞' : (p.ammo[w.id] ?? 0);
@@ -91,17 +86,17 @@ export function createHud(ctx) {
     c.beginPath();
     c.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
     c.clip();
-    // Ground canvas as the map, player-centred, north-up.
     const m = worldToMap(p.x, p.z);
     const src = (MAP_VIEW / 480) * 1024;
     c.drawImage(city.groundCanvas, m.px - src / 2, m.py - src / 2, src, src, 0, 0, S, S);
     const scale = S / MAP_VIEW;
     const toMap = (x, z) => ({ x: S / 2 + (x - p.x) * scale, y: S / 2 + (z - p.z) * scale });
+    const inView = (pt) => Math.hypot(pt.x - S / 2, pt.y - S / 2) < S / 2 - 4;
     // Mission marker: gold diamond.
     const target = state.mission.target;
     if (target) {
       const pt = toMap(target.x, target.z);
-      if (Math.hypot(pt.x - S / 2, pt.y - S / 2) < S / 2 - 4) {
+      if (inView(pt)) {
         c.fillStyle = '#ffd166';
         c.strokeStyle = '#1a1a2e';
         c.lineWidth = 1.5;
@@ -115,11 +110,20 @@ export function createHud(ctx) {
         c.stroke();
       }
     }
+    // Pay 'n' Spray: teal square.
+    const spray = state.police?.spray;
+    if (spray) {
+      const pt = toMap(spray.x, spray.z);
+      if (inView(pt)) {
+        c.fillStyle = '#2fd6c9';
+        c.fillRect(pt.x - 4, pt.y - 4, 8, 8);
+      }
+    }
     // Police blips: red/blue dots.
     const police = state.police ?? { units: [], heli: false };
     for (const unit of police.units) {
       const pt = toMap(unit.x, unit.z);
-      if (Math.hypot(pt.x - S / 2, pt.y - S / 2) > S / 2 - 4) continue;
+      if (!inView(pt)) continue;
       c.fillStyle = '#ff4040';
       c.beginPath();
       c.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
@@ -143,7 +147,6 @@ export function createHud(ctx) {
     c.fill();
     c.stroke();
     c.restore();
-    // Wanted ring + north tick.
     if (p.wanted > 0) {
       c.strokeStyle = 'rgba(255,64,64,0.9)';
       c.lineWidth = 3;
@@ -173,7 +176,6 @@ export function createHud(ctx) {
     setWidth(els.armorFill, 'armor', Math.max(0, Math.min(100, p.armor)));
     setHtml(els.weaponSlots, 'slots', weaponHtml(p));
     setHtml(els.missionPanel, 'mission', missionHtml(state.mission));
-    // Speedo + condition only while driving; km/h = speed * 5.
     const driving = !p.onFoot && p.inCar;
     setShown(els.speedo, 'speedoShown', !!driving);
     setShown(els.carCondition, 'condShown', !!driving);
@@ -209,6 +211,14 @@ export function createHud(ctx) {
     if (d) {
       setText(els.dialogue.querySelector('.speaker'), 'dlgSpeaker', d.speaker);
       setText(els.dialogue.querySelector('.line'), 'dlgLine', d.line);
+    }
+    // Mission banner: big centre flash on pass/fail.
+    const b = state.banner;
+    setHtml(els.banner, 'banner', b
+      ? '<div class="banner-title">' + b.title + '</div><div class="banner-sub">' + b.sub + '</div>' : '');
+    if (cache.bannerShown !== !!b) {
+      cache.bannerShown = !!b;
+      els.banner.classList.toggle('show', !!b);
     }
     drawMinimap(p);
   }

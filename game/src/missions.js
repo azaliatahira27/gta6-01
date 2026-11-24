@@ -1,11 +1,10 @@
-// Missions: six story jobs with staged objectives and dialogue. Writes
-// state.mission + state.dialogue every update.
+// Missions: six story jobs, staged objectives, dialogue, completion banner
+// and the auto-chain that starts the next job after each pass.
 import * as THREE from 'three';
 import { MISSIONS } from './config.js';
 import { dist2 } from './utils.js';
 
-const R_REACH = 8, R_TALK = 6, R_PICKUP = 6, DLG_SECS = 6;
-// [speaker, line] per stage start; done = completion line.
+const R_REACH = 8, R_TALK = 6, R_PICKUP = 6, DLG_SECS = 6, CHAIN_SECS = 6;
 const DATA = [
   { id: 'm1', cash: 500, rep: 50, stages: [
     { type: 'reach', target: { x: -42, z: 96 }, text: 'Borrow the Marlin parked on 6th Street.',
@@ -17,7 +16,7 @@ const DATA = [
     { type: 'reach', target: { x: -48, z: 144 }, text: 'Report back to Rosa\'s garage in Old Town.',
       line: ['Rosa', 'Back to the garage. First fare done, Mara — you\'re hired.'] },
   ], done: ['Rosa', 'Clean run. Five hundred, and the crew knows your name now.'] },
-  { id: 'm2', cash: 1200, rep: 100, stages: [
+  { id: 'm2', cash: 1200, rep: 100, unlock: 'K9 SMG · +120 rounds', stages: [
     { type: 'reach', target: { x: -150, z: -102 }, text: 'Steal the Tiburon X parked by the marina.',
       line: ['Deke', 'Tiburon X. Marina lot. Bring it breathing.'] },
     { type: 'deliver', target: { x: 48, z: -144 }, text: 'Bring the Tiburon to Deke at the docks.',
@@ -35,7 +34,7 @@ const DATA = [
     { type: 'reach', target: { x: -48, z: -144 }, text: 'Get back to Ines at the marina.',
       line: ['Ines', 'You\'re late. You\'re also alive. I\'ll take it.'] },
   ], done: ['Ines', 'Decrypted. The ABPD\'s whole shift roster. Priceless — well, two grand.'] },
-  { id: 'm4', cash: 3000, rep: 250, stages: [
+  { id: 'm4', cash: 3000, rep: 250, unlock: 'AR-77 Rifle · +90 rounds', stages: [
     { type: 'reach', target: { x: 96, z: -48 }, text: 'Reach the Downtown tower garage.',
       line: ['Rosa', 'Tower garage, Downtown. Voss\'s boys are watching it — of course they are.'] },
     { type: 'survive', secs: 30, text: 'Survive the heat for 30 seconds.',
@@ -71,7 +70,7 @@ export function createMissions(ctx) {
   let ready = false;
   let beacon, diamond;
   let activeId = null, stageIdx = 0, stageT = 0, surviveT = 0, timerLeft = 0, stageCar = null;
-  let doneList = [], dlgT = 0, prevE = false;
+  let doneList = [], dlgT = 0, prevE = false, chainT = 0;
 
   function init(c) {
     if (c) ctx = c;
@@ -110,20 +109,22 @@ export function createMissions(ctx) {
     stageT = 0;
     surviveT = 0;
     timerLeft = st.timer ?? 0;
-    stageCar = ctx.state.player.inCar; // wrecked-car fail check watches this car
+    stageCar = ctx.state.player.inCar;
+    // Escalation: a survive stage always brings real heat, never a quiet wait.
+    if (st.type === 'survive') ctx.state.player.wanted = Math.max(ctx.state.player.wanted, 2);
     say(st.line);
   }
 
   function startMission(id) {
     activeId = id;
     stageIdx = 0;
+    chainT = 0;
     ctx.emit('missionStart', { id });
     ctx.showToast(meta(id).name + ' — ' + meta(id).contact);
     beginStage();
   }
 
-  // Opening hook: a fresh run starts the first job at once — banner, beacon
-  // and briefing live from second 0 instead of waiting for the walk to Rosa.
+  // Opening hook: a fresh run starts the first job at once.
   function startNext() {
     if (activeId || doneList.length) return;
     const id = nextId();
@@ -133,6 +134,8 @@ export function createMissions(ctx) {
   function failMission(reason) {
     const id = activeId;
     activeId = null;
+    chainT = 0;
+    ctx.state.banner = { title: 'MISSION FAILED', sub: reason, t: 4 };
     ctx.emit('missionFail', { id });
     ctx.showToast('Mission failed — ' + reason);
     say([meta(id).contact || 'Rosa', 'It went sideways. Shake it off — the job\'s still there when you\'re ready.']);
@@ -148,6 +151,11 @@ export function createMissions(ctx) {
     if (activeId === 'm4') p.ammo.rifle = (p.ammo.rifle ?? 0) + 90;
     if (!doneList.includes(activeId)) doneList.push(activeId);
     if (ctx.state.saveData) ctx.state.saveData.missionsDone = [...doneList];
+    const next = nextId();
+    ctx.state.banner = { title: next ? 'MISSION PASSED' : 'LEGEND OF AZURA BAY',
+      sub: '$' + m.cash.toLocaleString('en-US') + '  ·  +' + m.rep + ' REP'
+        + (m.unlock ? '  ·  ' + m.unlock : ''), t: 5 };
+    if (next) chainT = CHAIN_SECS;
     ctx.emit('missionDone', { id: activeId, cash: m.cash, rep: m.rep });
     ctx.showToast('Mission complete — $' + m.cash.toLocaleString('en-US') + ' + ' + m.rep + ' REP');
     say(m.done);
@@ -188,12 +196,24 @@ export function createMissions(ctx) {
       dlgT -= dt;
       if (dlgT <= 0) s.dialogue = null;
     }
-    // Adopt a mission staged externally (shots.js sets state.mission directly).
+    if (s.banner) {
+      s.banner.t -= dt;
+      if (s.banner.t <= 0) s.banner = null;
+    }
     if (!activeId && s.mission.id && BY_ID.has(s.mission.id)) {
       activeId = s.mission.id;
       const m = BY_ID.get(activeId);
       stageIdx = Math.min(Math.max((s.mission.stage || 1) - 1, 0), m.stages.length - 1);
       beginStage();
+    }
+    // Auto-chain: the next job starts a few seconds after a pass, so the six
+    // jobs run as one chain. A manual E-start at the marker cancels the wait.
+    if (!activeId && chainT > 0) {
+      chainT -= dt;
+      if (chainT <= 0) {
+        const id = nextId();
+        if (id) startMission(id);
+      }
     }
     const eDown = ctx.keys.has('KeyE');
     const ePressed = eDown && !prevE;
@@ -205,7 +225,6 @@ export function createMissions(ctx) {
       const st = m.stages[stageIdx];
       stageT += dt;
       if (st.target) target = st.target;
-      // Fail: timer out, getaway car wrecked, or busted (police missionFail).
       if (st.timer && (timerLeft -= dt) <= 0) failMission('Out of time.');
       else if (st.type === 'deliver' && stageCar && stageCar.wrecked) failMission('Your getaway car is wrecked.');
       else if (s.events.some((ev) => ev.type === 'missionFail')) failMission('Busted by the ABPD.');
@@ -217,13 +236,11 @@ export function createMissions(ctx) {
         else if (st.type === 'lose' && p.wanted === 0) advance();
         else if (st.type === 'deliver' && d < R_REACH && p.inCar && p.inCar.condition > 30) advance();
         else if (st.type === 'survive') {
-          // Counts only while the heat is on; a quiet night still ends it.
           if (p.wanted >= 2) surviveT += dt;
           if (surviveT >= st.secs || stageT >= st.secs + 45) advance();
         }
       }
     } else {
-      // Free roam: refresh the completed list (save.js may land late).
       const saved = s.saveData?.missionsDone;
       if (Array.isArray(saved)) doneList = [...saved];
       const id = nextId();
@@ -234,7 +251,6 @@ export function createMissions(ctx) {
       }
     }
 
-    // Beacon follows the current objective; gone once every job is done.
     if (beacon) {
       beacon.visible = !!target;
       if (target) {

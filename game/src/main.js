@@ -1,24 +1,12 @@
-// Azura Bay — boot, game loop and state machine.
-//
-// The loop runs the simulation in fixed 1/60 s steps (several in a slow frame, none
-// in a fast one) and renders every frame. The game moves between four screens:
-// menu, playing, paused and over. Every system registers through registerSystem()
-// and gets update(dt, ctx) each step, in registration order — see
-// docs/INTERFACES.md for the init order and the shared state shape.
-//
-// ?seed=N fixes the city. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a
-// screenshot. window.__game exposes the live state for debugging.
+// Azura Bay — boot, game loop and state machine. Fixed 1/60 s steps, render
+// every frame. Screens: menu, playing, paused, over. ?seed=N fixes the city;
+// ?shot=start|play|end stages a screenshot scene. window.__game is the debug hook.
 import * as THREE from 'three';
 import { CAMERA, CLOCK, MAX_FRAME, PLAYER, RADIO, REP_RANKS, SAVE_KEY, STEP, WEAPONS } from './config.js';
 import { buildCity, clampToMap, worldToMap } from './city.js';
 import { clamp, formatCash, formatClock, lerp, lerpAngle, repRankFor, resolveCircleBox, wantedStars } from './utils.js';
 import { stageShot } from './shots.js';
 
-// --- SYSTEM IMPORTS -------------------------------------------------------------
-// Later builders add their module here (one import + one registerSystem call in
-// bootSystems, in the order docs/INTERFACES.md prescribes). Nothing is imported
-// that does not exist yet, so the skeleton runs standalone.
 import { createHud } from './hud.js';            // Builder B: HUD + minimap
 import { createVehicles } from './vehicles.js';  // Builder B: cars + driving
 import { createTraffic } from './traffic.js';    // Builder C: traffic + peds
@@ -35,7 +23,7 @@ const shot = params.get('shot');
 const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
 const seed = Number.isInteger(seedParam) ? seedParam : 20261118;
 
-/** The one shared state object. Every system reads and writes this; see INTERFACES.md. */
+/** The one shared state object. */
 export const state = {
   screen: 'menu',
   time: 0,
@@ -49,20 +37,21 @@ export const state = {
     weapon: 'fists', ammo: {},
   },
   mission: { id: null, stage: 0, title: 'Free Roam', text: 'Explore Azura Bay. Steal a car, meet the crew, make a name.' },
+  banner: null,
+  shake: 0,
+  hitStop: 0,
   camera: { yaw: 0, pitch: 0.32, yawOffset: 0, dist: CAMERA.onFootDist },
   radio: { station: 0, muted: false },
   events: [],
   stats: { carsStolen: 0, missionsDone: 0, distanceDriven: 0, copsLost: 0, enemiesDown: 0 },
 };
 
-/** Systems registered for the fixed-step update, in order. */
 const systems = [];
 let missionsSys = null;
 export function registerSystem(system) {
   systems.push(system);
 }
 
-/** Queue a game event (systems drain state.events after each step). */
 export function emit(type, data = {}) {
   state.events.push({ type, data, at: state.time });
 }
@@ -78,6 +67,7 @@ const els = {
   weaponSlots: $('weapon-slots'), speedo: $('speedo'), carCondition: $('car-condition'),
   radio: $('radio'), dialogue: $('dialogue-box'), toast: $('toast'),
   startScreen: $('start-screen'), pauseMenu: $('pause-menu'), status: $('status'),
+  overScreen: $('over-screen'),
 };
 const minimapCtx = els.minimap.getContext('2d');
 
@@ -102,8 +92,6 @@ state.player.x = spawn.x;
 state.player.z = spawn.z;
 state.player.heading = spawn.heading;
 
-// Placeholder player: a capsule in Mara's sunset jacket. The character builder
-// replaces this mesh; the state shape stays the same.
 const playerMesh = new THREE.Group();
 const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff7e5f, roughness: 0.7 });
 const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.0, 4, 10), bodyMat);
@@ -129,6 +117,7 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'Escape') togglePause();
   if (e.code === 'Enter' && state.screen === 'menu') startGame();
+  if (e.code === 'Space' && state.screen === 'over') restartRun();
   if (e.code === 'KeyQ') cycleRadio();
   if (e.code === 'KeyN') toggleMute();
   if (e.code.startsWith('Digit')) {
@@ -139,6 +128,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 renderer.domElement.addEventListener('pointerdown', (e) => { mouse.down = true; mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('pointerdown', () => { if (state.screen === 'over') restartRun(); });
 window.addEventListener('pointerup', () => { mouse.down = false; });
 window.addEventListener('pointermove', (e) => {
   if (!mouse.down) return;
@@ -164,7 +154,6 @@ function toggleMute() {
   showToast(state.radio.muted ? 'Sound muted' : 'Sound on');
 }
 
-// --- Save (minimal stub; save.js extends this with missions + garage) ---------------
 function saveGame() {
   try {
     const p = state.player;
@@ -197,7 +186,6 @@ function loadGame() {
   }
 }
 
-// --- HUD stub (hud.js takes this over; same element ids, richer rendering) ----------
 let toastTimer = 0;
 function showToast(text) {
   els.toast.textContent = text;
@@ -209,14 +197,6 @@ function announce(message) {
   els.status.textContent = message;
 }
 
-const hudCache = {};
-function setText(el, key, value) {
-  if (hudCache[key] !== value) {
-    hudCache[key] = value;
-    el.textContent = value;
-  }
-}
-// --- Player stub (vehicles.js + combat.js extend movement; state shape is final) -----
 function stepPlayer(dt) {
   const p = state.player;
   if (state.screen !== 'playing') {
@@ -246,7 +226,6 @@ function stepPlayer(dt) {
   p.z = pos.z;
   playerMesh.position.set(p.x, 0, p.z);
   playerMesh.rotation.y = p.heading;
-  // Bob while moving; lean into the run.
   const moving = Math.abs(p.speed) > 0.5;
   body.position.y = 1.05 + (moving ? Math.abs(Math.sin(state.time * 10)) * 0.06 : 0);
   body.rotation.x = moving ? 0.08 : 0;
@@ -259,7 +238,6 @@ const camPos = new THREE.Vector3(-120, 60, 160);
 function stepCamera(dt) {
   const p = state.player;
   if (state.screen === 'menu') {
-    // Slow establishing orbit over the city for the start screen.
     const t = state.time * 0.03;
     camTarget.set(0, 12, 0);
     camPos.set(Math.sin(t) * 150 - 60, 62, Math.cos(t) * 150);
@@ -281,6 +259,19 @@ function stepCamera(dt) {
     p.z + Math.cos(p.heading) * CAMERA.lookAhead,
   );
   camera.lookAt(camTarget);
+  // Impact shake + speed FOV kick: live play only, never staged screenshots.
+  if (!shot && state.shake > 0.01) {
+    camera.position.x += (Math.random() - 0.5) * state.shake;
+    camera.position.y += (Math.random() - 0.5) * state.shake;
+    state.shake *= Math.pow(0.02, dt);
+  }
+  if (!shot) {
+    const wantFov = CAMERA.fov + (p.inCar ? Math.min(13, Math.abs(p.speed) * 0.35) : 0);
+    if (Math.abs(camera.fov - wantFov) > 0.05) {
+      camera.fov += (wantFov - camera.fov) * Math.min(1, dt * 3);
+      camera.updateProjectionMatrix();
+    }
+  }
 }
 
 // --- Screens ---------------------------------------------------------------------------
@@ -322,11 +313,13 @@ function restartRun() {
   state.clockMinutes = CLOCK.startHour * 60 + CLOCK.startMinute;
   state.screen = 'playing';
   els.pauseMenu.classList.add('hidden');
+  els.overScreen.classList.add('hidden');
   els.startScreen.classList.add('hidden');
   announce('New run. Welcome back to Azura Bay.');
 }
 els.startButton = $('start-button');
 els.startButton.addEventListener('click', startGame);
+$('retry-button').addEventListener('click', restartRun);
 $('resume-button').addEventListener('click', togglePause);
 $('restart-button').addEventListener('click', restartRun);
 document.addEventListener('visibilitychange', () => {
@@ -335,7 +328,6 @@ document.addEventListener('visibilitychange', () => {
 
 // --- Systems boot ------------------------------------------------------------------------
 function bootSystems() {
-  // Order is the contract (INTERFACES.md).
   registerSystem({ name: 'city', update: (dt) => city.update(dt, state.time) });
   registerSystem({ name: 'player', update: (dt) => stepPlayer(dt) });
   registerSystem(createVehicles(ctx));
@@ -359,7 +351,6 @@ function stepWorld(dt) {
     state.clockMinutes += CLOCK.minutesPerRealSecond * dt;
   }
   for (const sys of systems) sys.update(dt, ctx);
-  // Drain events: toasts and announcements live here until hud.js owns them.
   for (const ev of state.events) {
     if (ev.type === 'toast') showToast(ev.data.text);
     if (ev.type === 'announce') announce(ev.data.text);
@@ -383,8 +374,15 @@ function runGame() {
   let saveTimer = 0;
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    const frameDt = Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
+    // Hit-stop: a hard impact freezes the sim for a beat while frames go on.
+    if (state.hitStop > 0) {
+      state.hitStop -= frameDt;
+      accumulator = 0;
+    } else {
+      accumulator += frameDt;
+    }
     if (state.screen === 'menu' || state.screen === 'playing') {
       while (accumulator >= STEP) {
         stepWorld(STEP);
@@ -423,8 +421,6 @@ function runShot(name) {
   requestAnimationFrame(paint);
 }
 
-// Debug + screenshot hooks. Screenshot staging reads window.__game; the harness
-// waits for window.__shotReady.
 window.__game = {
   state, city, scene, camera, renderer, playerMesh,
   stepWorld, saveGame, loadGame, startGame, togglePause,

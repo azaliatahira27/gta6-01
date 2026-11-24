@@ -1,7 +1,10 @@
-// ABPD wanted system: heat, pursuit units, heli, roadblocks. Writes state.police.
+// ABPD wanted system: heat, pursuit units, heli, roadblocks, Pay 'n' Spray.
 import * as THREE from 'three';
 import { POLICE } from './config.js';
 import { clamp, dist2, lerpAngle, mulberry32, pick } from './utils.js';
+
+// Pay 'n' Spray, Old Town: drive in to repair the car and clear the heat.
+const SPRAY = { x: -48, z: 192, price: 150, r: 7 };
 
 const CALLSIGNS = ['ABPD-11', 'ABPD-23', 'ABPD-37', 'ABPD-42', 'ABPD-58'];
 const DECAY_SECONDS = 45;
@@ -10,7 +13,7 @@ const BUST_SECONDS = 3;
 
 function makeInterceptorMesh(name, id) {
   const g = new THREE.Group();
-  g.scale.setScalar(1.15); // read at frame scale: bigger silhouette than traffic
+  g.scale.setScalar(1.15);
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.95, 0.8, 4.4),
     new THREE.MeshStandardMaterial({ color: POLICE.carColor, roughness: 0.4, metalness: 0.5 }));
   body.position.y = 0.6;
@@ -20,7 +23,6 @@ function makeInterceptorMesh(name, id) {
     new THREE.MeshStandardMaterial({ color: 0x101820, roughness: 0.2, metalness: 0.6 }));
   cabin.position.set(0, 1.25, -0.2);
   g.add(cabin);
-  // Light bar: two emissive lenses, flashed alternately.
   const bar = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.2, 0.44),
     new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 }));
   bar.position.set(0, 1.62, -0.2);
@@ -45,15 +47,29 @@ function makeInterceptorMesh(name, id) {
   return g;
 }
 
+function makeSprayMesh() {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.RingGeometry(4.5, 5.5, 24),
+    new THREE.MeshBasicMaterial({ color: 0x2fd6c9, transparent: true, opacity: 0.5, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.05;
+  g.add(ring);
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 24, 8, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x2fd6c9, transparent: true, opacity: 0.15,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+  pillar.position.y = 12;
+  g.add(pillar);
+  return g;
+}
+
 function makeHeliMesh() {
   const g = new THREE.Group();
-  g.scale.setScalar(1.5); // read at frame scale: a helicopter, not a black box
+  g.scale.setScalar(1.5);
   const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.4, 5.4),
     new THREE.MeshStandardMaterial({ color: 0xd8dee6, roughness: 0.5, metalness: 0.4,
       emissive: 0x8b9aa8, emissiveIntensity: 0.9 }));
   body.position.y = 0;
   g.add(body);
-  // Rotor disc reads as a helicopter against the sky.
   const rotor = new THREE.Mesh(new THREE.CylinderGeometry(5.2, 5.2, 0.06, 24),
     new THREE.MeshBasicMaterial({ color: 0x14181c, transparent: true, opacity: 0.6 }));
   rotor.position.y = 1.1;
@@ -63,10 +79,9 @@ function makeHeliMesh() {
       emissive: 0x8b9aa8, emissiveIntensity: 0.9 }));
   tail.position.set(0, 0.2, -4.2);
   g.add(tail);
-  // Spotlight cone, apex at the heli, opening toward the player below.
   const cone = new THREE.Mesh(new THREE.ConeGeometry(7, 28, 20, 1, true),
     new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.26, side: THREE.DoubleSide, depthWrite: false }));
-  cone.position.y = -14; // apex at the heli, wide end on the ground below
+  cone.position.y = -14;
   g.add(cone);
   g.userData = { kind: 'cop', id: 'heli', hp: 9999, rotor, cone };
   return g;
@@ -88,6 +103,8 @@ export function createPolice(ctx) {
   let bustT = 0;
   let scanT = 0;
   let copSeq = 0;
+  let sprayHinted = false;
+  let sprayNagT = 0;
   const deadCounted = new Set();
 
   function neighbours(id) {
@@ -103,7 +120,6 @@ export function createPolice(ctx) {
     return pool.length ? pick(rng, pool) : ctx.city.nearestNode(p.x, p.z);
   }
 
-  // Greedy graph step: the neighbour that gets closest to the goal node.
   function nextNodeToward(fromId, goalId) {
     const goal = net.nodes[goalId];
     let best = fromId;
@@ -159,7 +175,6 @@ export function createPolice(ctx) {
     const p = c.state.player;
     for (const ev of c.state.events) {
       if (ev.type === 'carStolen') {
-        // Stealing a different car while wanted shakes the pursuit off for 5s.
         if (p.wanted > 0) {
           for (const u of units) { u.state = 'LOST'; u.lostT = 5; }
         }
@@ -196,7 +211,6 @@ export function createPolice(ctx) {
     heli.userData.rotor.rotation.y += dt * 22;
   }
 
-  // Shot staging: state.police.stage poses the real units/heli (shots.js only).
   function applyStage(c) {
     const st = c.state.police.stage;
     if (!st) return;
@@ -229,7 +243,6 @@ export function createPolice(ctx) {
     blockT = 10;
     for (const b of roadblocks) c.scene.remove(b.mesh);
     roadblocks = [];
-    // Nearest node ahead of the player's heading, parked across the road.
     const ahead = { x: p.x + Math.sin(p.heading) * 55, z: p.z + Math.cos(p.heading) * 55 };
     const node = c.city.nearestNode(ahead.x, ahead.z);
     for (let i = 0; i < 2; i += 1) {
@@ -262,8 +275,6 @@ export function createPolice(ctx) {
 
   function updateUnits(dt, c) {
     const p = c.state.player;
-    // Active count matches the wanted level; wrecks persist on the street
-    // (and stay scannable for kill heat) until the heat fully drops.
     while (units.filter((u) => !u.wrecked).length < p.wanted && units.length < 8) spawnUnit();
     while (units.filter((u) => !u.wrecked).length > p.wanted) {
       const spare = [...units].reverse().find((u) => !u.wrecked);
@@ -286,7 +297,6 @@ export function createPolice(ctx) {
       }
       if (u.wrecked) continue;
       const d = dist2(u.x, u.z, p.x, p.z);
-      // Line of sight: lost after 10s beyond 90 units.
       if (d > 90) u.losT += dt;
       else { u.losT = 0; u.lastKnown = { x: p.x, z: p.z }; }
       if (u.lostT > 0) {
@@ -312,20 +322,17 @@ export function createPolice(ctx) {
         }
         driveUnit(u, dt, c, net.nodes[u.target].x, net.nodes[u.target].z, 20);
       } else if (u.state === 'RAMMING') {
-        // Aim at where the player will be, not where they are.
         const lead = 0.6;
         driveUnit(u, dt, c,
           p.x + Math.sin(p.heading) * p.speed * lead,
           p.z + Math.cos(p.heading) * p.speed * lead, 30);
       } else {
-        // PURSUING: chase directly, matching the player's pace.
         const top = clamp(Math.abs(p.speed) + 6, 14, 28);
         driveUnit(u, dt, c, p.x, p.z, top);
       }
     }
   }
 
-  // Kill heat: scan the scene twice a second for newly dead peds/cops.
   function scanDeaths(dt, c) {
     scanT += dt;
     if (scanT < 0.5) return;
@@ -367,6 +374,34 @@ export function createPolice(ctx) {
     if (c.state.mission.id) c.emit('missionFail', { id: c.state.mission.id });
   }
 
+  function updateSpray(dt, c) {
+    const p = c.state.player;
+    const car = p.inCar;
+    const d = dist2(p.x, p.z, SPRAY.x, SPRAY.z);
+    if (!sprayHinted && d < 25 && car && (car.condition < 100 || p.wanted > 0)) {
+      sprayHinted = true;
+      c.showToast('Pay \'n\' Spray — drive in to repair + lose the heat ($' + SPRAY.price + ').');
+    }
+    if (!car || d > SPRAY.r) return;
+    if (car.condition >= 100 && p.wanted === 0) return;
+    if (p.cash < SPRAY.price) {
+      sprayNagT -= dt;
+      if (sprayNagT <= 0) {
+        sprayNagT = 8;
+        c.showToast('Pay \'n\' Spray needs $' + SPRAY.price + ' — you\'re short.');
+      }
+      return;
+    }
+    p.cash -= SPRAY.price;
+    car.condition = 100;
+    car.wrecked = false;
+    car.model.userData.hp = 100;
+    const paint = car.model.children[0].material;
+    if (paint && paint.color) paint.color.setHex(car.def.color);
+    setWanted(0, c);
+    c.showToast('Pay \'n\' Spray — fresh paint, clean slate. -$' + SPRAY.price + '.');
+  }
+
   function init(c) {
     if (ready) return;
     ready = true;
@@ -377,17 +412,18 @@ export function createPolice(ctx) {
       adj.get(e.a).push(e.b);
       adj.get(e.b).push(e.a);
     }
-    c.state.police = { units: [], heli: false };
+    const spray = makeSprayMesh();
+    spray.position.set(SPRAY.x, 0, SPRAY.z);
+    c.scene.add(spray);
+    c.state.police = { units: [], heli: false, spray: { x: SPRAY.x, z: SPRAY.z } };
   }
 
   function update(dt, c) {
-    // main.js never calls init(); spawn lazily on the first step.
     if (!ready) init(c);
     const p = c.state.player;
     if (!c.state.police) c.state.police = { units: [], heli: false };
     if (c.state.screen === 'playing') {
       readEvents(c);
-      // Decay: 45s with no crime and no unit within 60 units.
       const near = units.some((u) => !u.wrecked && dist2(u.x, u.z, p.x, p.z) < 60);
       if (p.wanted > 0 && !near) {
         quietT += dt;
@@ -403,9 +439,9 @@ export function createPolice(ctx) {
       applyStage(c);
       updateRoadblocks(dt, c);
       updateBusted(dt, c);
+      updateSpray(dt, c);
       scanDeaths(dt, c);
     }
-    // Flash the light bars every 0.4s.
     flashT += dt;
     if (flashT >= 0.4) {
       flashT = 0;
@@ -415,7 +451,6 @@ export function createPolice(ctx) {
         u.mesh.userData.lensB.material.emissiveIntensity = flashOn ? 0.4 : 8;
       }
     }
-    // Publish the contract state every step.
     const list = units.map((u) => ({
       name: u.name, state: u.state,
       dist: Math.round(dist2(u.x, u.z, p.x, p.z)), x: u.x, z: u.z,

@@ -254,6 +254,8 @@ export function createCombat(ctx) {
     if (p.health <= 0) {
       ctx.emit('playerDown', {});
       ctx.state.screen = 'over';
+      const over = document.getElementById('over-screen');
+      if (over) over.classList.remove('hidden');
     }
   }
 
